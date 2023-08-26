@@ -1,0 +1,289 @@
+package com.ybear.ybcomponent.widget.svga;
+
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
+import android.content.Context;
+import android.text.TextUtils;
+import android.util.AttributeSet;
+import android.view.animation.LinearInterpolator;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.core.util.Consumer;
+
+import com.opensource.svgaplayer.SVGADrawable;
+import com.opensource.svgaplayer.SVGAImageView;
+import com.opensource.svgaplayer.SVGAVideoEntity;
+import com.opensource.svgaplayer.utils.SVGARange;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * SVGAImageView 拓展版本，支持播完指定区间动画后，重复额外指定的区间动画
+ * 比如一个小人跳一下，然后一直走路（跳一下是指定区间，一直走是额外指定的区间）
+ *
+ * 使用时需要引用：'com.github.yyued:SVGAPlayer-Android:2.6.1'
+ */
+public class SuperSVGAImageView extends SVGAImageView {
+    private static final String TAG = "SuperSVGAImageViewTAG";
+    private ValueAnimator mAnimRepeat;
+    private ValueAnimator mAnimAlpha;
+
+    public SuperSVGAImageView(@NonNull Context context, @Nullable AttributeSet attrs) {
+        super( context, attrs );
+    }
+
+    public SuperSVGAImageView(@NonNull Context context) {
+        super( context );
+    }
+
+    public SuperSVGAImageView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
+        super( context, attrs, defStyleAttr );
+    }
+
+    private void setField(String name, Object val) {
+        setFieldValue( this, name, val );
+    }
+
+    private Object getField(String name) {
+        return getFieldValue( this, name );
+    }
+
+    private Object invokeMethod(String name, Object... val) {
+        return invokeMethod( this, name, val );
+    }
+
+    private Object invokeMethod(Object obj, String methodName,
+                                      Object[] args, Class<?>... argsType) {
+        try {
+            if( obj == null || methodName == null || "".equals( methodName ) ) return null;
+            Method method = getMethod( obj, methodName );
+            if( method == null ) return null;
+            method.setAccessible( true );
+            if( args == null || args.length == 0 || argsType == null || args.length != argsType.length ) {
+                return method.invoke( obj );
+            }
+            return method.invoke( obj, args );
+        }catch(IllegalAccessException | InvocationTargetException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    private Method getMethod(Object obj, String methodName) {
+        if( obj == null || TextUtils.isEmpty( methodName ) ) return null;
+        Class<?> cls = obj instanceof Class<?> ? (Class<?>) obj : obj.getClass();
+        try {
+            return cls.getMethod( methodName );
+        }catch(NoSuchMethodException e) {
+            try {
+                return cls.getDeclaredMethod( methodName );
+            }catch(NoSuchMethodException e1) {
+                if( ( cls = cls.getSuperclass() ) == null ) return null;
+                return getMethod( cls, methodName );
+            }
+        }
+    }
+
+    private Field getField(Object obj, String fieldName) {
+        if( obj == null || TextUtils.isEmpty( fieldName ) ) return null;
+        Class<?> cls = obj instanceof Class<?> ? (Class<?>) obj : obj.getClass();
+        try {
+            return cls.getField( fieldName );
+        }catch(NoSuchFieldException e) {
+            try {
+                return cls.getDeclaredField( fieldName );
+            }catch(NoSuchFieldException e1) {
+                if( ( cls = cls.getSuperclass() ) == null ) return null;
+                return getField( cls, fieldName );
+            }
+        }
+    }
+
+    private Object getFieldValue(Object obj, String fieldName) {
+        try {
+            Field field = getField( obj, fieldName );
+            if( field == null ) return null;
+            field.setAccessible( true );
+            return field.get( obj );
+        }catch(IllegalAccessException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    private boolean setFieldValue(Object obj, String fieldName, Object val) {
+        try {
+            Field field = getField( obj, fieldName );
+            if( field != null ) {
+                field.setAccessible( true );
+                field.set( obj, val );
+                return true;
+            }
+        }catch(IllegalAccessException e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    public void startAnimation(SVGARange range, int repeatLocation, int repeatLength, int repeatCount,
+                               boolean isEndAlpha, boolean reverse) {
+        stopAnimation( false );
+        if( onInterceptPlay( range, repeatLocation, repeatLength, repeatCount, isEndAlpha, reverse ) ) {
+            return;
+        }
+        superPlay( range, repeatLocation, repeatLength, repeatCount, isEndAlpha, reverse );
+    }
+
+    public void startAnimation(SVGARange range, int repeatLocation, int repeatLength, int repeatCount,
+                               boolean reverse) {
+        startAnimation( range, repeatLocation, repeatLength, repeatCount, false, reverse );
+    }
+
+    public void startAnimation(int repeatLocation, int repeatLength, int repeatCount, boolean isEndAlpha, boolean reverse) {
+        startAnimation( null, repeatLocation, repeatLength, repeatCount, isEndAlpha, reverse );
+    }
+
+    public boolean onInterceptPlay(SVGARange range, int repeatLocation, int repeatLength,
+                                   int repeatCount, boolean isEndAlpha, boolean reverse) {
+        return false;
+    }
+
+    private void superPlay(SVGARange range, int repeatLocation, int repeatLength, int repeatCount,
+                           boolean isEndAlpha, boolean reverse) {
+        SVGADrawable drawable = (SVGADrawable) invokeMethod( "getSVGADrawable" );
+        if( drawable == null ) return;
+        int location = range == null ? 0 : range.getLocation();
+        int length = range == null ? Integer.MAX_VALUE : range.getLength();
+        invokeMethod( "setupDrawable" );
+        SVGAVideoEntity videoItem = drawable.getVideoItem();
+        int startFrame = range == null ? 0 : range.getLocation();
+        int endFrame = Math.min( videoItem.getFrames(), ( location + length - 1 ) );
+
+        int fps = videoItem.getFPS();
+
+        setField( "mStartFrame", startFrame );
+        setField( "mEndFrame", endFrame );
+
+        long dur = calcDuration( startFrame, endFrame, fps )/* + repeatDuration*/;
+        int animRepeatCount = getLoops() <= 0 ? Integer.MAX_VALUE : getLoops() - 1;
+        boolean isRepeat = repeatLocation >= 0 && repeatLength >= repeatLocation;
+
+        setAlpha( 1F );
+        AtomicInteger atoAlpha = new AtomicInteger();
+        Consumer<ValueAnimator> runAnimAlpha = va -> {
+            int val = (int) va.getAnimatedValue();
+            long curDur = va.getDuration();
+            //结尾的渐隐动画
+            int durAlpha = (int) ( (double)curDur * 0.068D );
+            int toVal = calcFrame( isRepeat ? repeatLength : endFrame, curDur, durAlpha );
+            if( toVal != val ) return;
+            if( atoAlpha.incrementAndGet() > 1 ) return;
+            if( isEndAlpha ) {
+                mAnimAlpha = ValueAnimator.ofFloat( 1.0F, 0F );
+                mAnimAlpha.setDuration( durAlpha );
+                mAnimAlpha.setRepeatCount( 0 );
+                mAnimAlpha.addListener( (Animator.AnimatorListener) getField( "mAnimatorListener" ) );
+                mAnimAlpha.addUpdateListener( va2 ->
+                        setAlpha((float) va2.getAnimatedValue())
+                );
+                mAnimAlpha.start();
+            }else {
+                va.addListener( (Animator.AnimatorListener) getField( "mAnimatorListener" ) );
+            }
+        };
+
+        ValueAnimator animator = ValueAnimator.ofInt( startFrame, endFrame );
+        animator.setInterpolator( new LinearInterpolator() );
+        animator.setDuration( dur );
+        animator.setRepeatCount( animRepeatCount );
+        animator.addUpdateListener(
+                (ValueAnimator.AnimatorUpdateListener) getField( "mAnimatorUpdateListener" )
+        );
+
+        if( !isRepeat ) {
+            animator.addUpdateListener( runAnimAlpha::accept );
+        }
+        animator.addListener( new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                super.onAnimationEnd( animation );
+                if( !isRepeat ) return;
+                long dur = calcDuration( repeatLocation, repeatLength, fps );
+                mAnimRepeat = ValueAnimator.ofInt( repeatLocation, repeatLength );
+                mAnimRepeat.setInterpolator( new LinearInterpolator() );
+                mAnimRepeat.setDuration( dur );
+                mAnimRepeat.setRepeatCount( repeatCount - 1 );
+                mAnimRepeat.addUpdateListener(
+                        (ValueAnimator.AnimatorUpdateListener) getField( "mAnimatorUpdateListener" )
+                );
+                AtomicInteger atoCurRepeatCount = new AtomicInteger();
+                mAnimRepeat.addListener( new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationRepeat(Animator animation) {
+                        super.onAnimationRepeat( animation );
+                        if( atoCurRepeatCount.incrementAndGet() < repeatCount - 1 ) return;
+                        mAnimRepeat.addUpdateListener( runAnimAlpha::accept );
+                    }
+                } );
+                if( mAnimRepeat.getRepeatCount() <= 0 ) {
+                    mAnimRepeat.addUpdateListener( runAnimAlpha::accept );
+                }
+                if ( reverse ) {
+                    mAnimRepeat.reverse();
+                } else {
+                    mAnimRepeat.start();
+                }
+            }
+        } );
+        if ( reverse ) {
+            animator.reverse();
+        } else {
+            animator.start();
+        }
+        setField( "mAnimator", animator );
+    }
+
+    public void pauseAnimationSuper() {
+        clearAnim( mAnimRepeat );
+        clearAnim( mAnimAlpha );
+        pauseAnimation();
+    }
+
+    public void stopAnimationSuper(boolean clear) {
+        clearAnim( mAnimRepeat );
+        clearAnim( mAnimAlpha );
+        stopAnimation( clear );
+    }
+
+    private void clearAnim(ValueAnimator animator) {
+        if( animator == null ) return;
+        try {
+            animator.cancel();
+            animator.removeAllListeners();
+            animator.removeAllUpdateListeners();
+        }catch(Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        clearAnim( mAnimRepeat );
+        clearAnim( mAnimAlpha );
+    }
+
+    private long calcDuration(int start, int end, int fps) {
+        //((mEndFrame - mStartFrame + 1) * (1000 / videoItem.FPS) / generateScale()).toLong()
+        return (long) ( ( end - start + 1F ) * ( 1000F / fps ) / (double) invokeMethod( "generateScale" ) );
+    }
+
+    private int calcFrame(int fromEnd, long fromDur, long toDur) {
+        return (int) ( fromEnd - ( ( (double) fromEnd / (double) fromDur ) * (double) toDur ) );
+    }
+}
