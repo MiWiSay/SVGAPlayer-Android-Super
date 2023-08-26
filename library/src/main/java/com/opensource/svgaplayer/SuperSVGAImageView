@@ -1,4 +1,4 @@
-package com.ybear.ybcomponent.widget.svga;
+package com.opensource.svgaplayer;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
